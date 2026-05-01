@@ -136,8 +136,6 @@ cache.py — кеширование
 db_logger.py — логирование
 
 
----
-
 ## ⚡ Установка и запуск
 
 ```bash
@@ -145,12 +143,13 @@ python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 
----
 Создать .env:
----
+
 OPENAI_API_KEY=your_api_key
 
+Запуск:
+
+python main.py
 
 
 
-аналитика запросов
