@@ -206,7 +206,8 @@ class EmbeddingStore:
         # Выполняем поиск в ChromaDB
         results = self.collection.query(
             query_embeddings=[query_embedding],
-            n_results=min(top_k, self.collection.count())
+            n_results=min(top_k, self.collection.count()),
+            where={"source": "Python Основы"}
         )
         
         # Форматируем результаты

@@ -9,10 +9,12 @@
 """
 
 import os
+import time
 from dotenv import load_dotenv
 from embeddings import EmbeddingStore, get_sample_documents
 from rag import RAGAssistant
 from cache import ResponseCache
+from db_logger import DatabaseLogger
 
 
 def initialize_system():
@@ -65,15 +67,23 @@ def initialize_system():
         model="gpt-3.5-turbo",
         temperature=0.7
     )
+
+    logger = DatabaseLogger()
     
     print("\n" + "=" * 70)
     print("✅ СИСТЕМА ГОТОВА К РАБОТЕ")
     print("=" * 70)
     
-    return embedding_store, rag_assistant, cache
+    return embedding_store, rag_assistant, cache, logger
 
 
-def answer_question(query: str, rag_assistant: RAGAssistant, cache: ResponseCache) -> str:
+def answer_question(
+    query: str,
+    rag_assistant: RAGAssistant,
+    cache: ResponseCache,
+    logger: DatabaseLogger,
+    source: str = "console",
+) -> str:
     """
     Отвечает на вопрос пользователя с использованием кеша и RAG.
     
@@ -94,48 +104,73 @@ def answer_question(query: str, rag_assistant: RAGAssistant, cache: ResponseCach
     print("\n" + "=" * 70)
     print(f"❓ ВОПРОС: {query}")
     print("=" * 70)
+
+    start_time = time.time()
+    answer = None
+    from_cache = False
     
     # Шаг 1: Проверяем кеш
     print("\n[Шаг 1] Проверка кеша...")
     cached_answer = cache.get(query)
     
     if cached_answer:
-        # Ответ найден в кеше - возвращаем его
+        answer = cached_answer
+        from_cache = True
+        # Ответ найден в кеше
         print("\n💾 Ответ из кеша:")
-        print("-" * 70)
-        print(cached_answer)
-        print("-" * 70)
-        return cached_answer
-    
-    # Шаг 2: Ответа нет в кеше - выполняем RAG
-    print("\n[Шаг 2] Выполнение RAG (поиск + генерация)...")
-    
-    try:
-        answer, search_results = rag_assistant.generate_response(
-            query=query,
-            top_k=3,
-            verbose=True
-        )
-        
-        # Шаг 3: Сохраняем ответ в кеш
-        print("\n[Шаг 3] Сохранение ответа в кеш...")
-        cache.set(query, answer)
-        
-        # Выводим финальный ответ
-        print("\n💡 ОТВЕТ:")
         print("-" * 70)
         print(answer)
         print("-" * 70)
-        
-        return answer
-        
-    except Exception as e:
-        error_msg = f"Ошибка при обработке запроса: {str(e)}"
-        print(f"\n❌ {error_msg}")
-        return error_msg
+    else:
+        # Шаг 2: Ответа нет в кеше - выполняем RAG
+        print("\n[Шаг 2] Выполнение RAG (поиск + генерация)...")
+
+        try:
+            answer, search_results = rag_assistant.generate_response(
+                query=query,
+                top_k=7,
+                verbose=True
+            )
+
+            # Шаг 3: Сохраняем ответ в кеш
+            print("\n[Шаг 3] Сохранение ответа в кеш...")
+            cache.set(query, answer)
+
+            # Выводим финальный ответ
+            print("\n💡 ОТВЕТ:")
+            print("-" * 70)
+            print(answer)
+            print("-" * 70)
+
+        except Exception as e:
+            answer = f"Ошибка при обработке запроса: {str(e)}"
+            print(f"\n❌ {answer}")
+            response_time_ms = int((time.time() - start_time) * 1000)
+            logger.log_interaction(
+                query=query,
+                response=answer,
+                source=source,
+                user_id="local",
+                username="local_user",
+                from_cache=from_cache,
+                response_time_ms=response_time_ms,
+            )
+            return answer
+
+    response_time_ms = int((time.time() - start_time) * 1000)
+    logger.log_interaction(
+        query=query,
+        response=answer,
+        source=source,
+        user_id="local",
+        username="local_user",
+        from_cache=from_cache,
+        response_time_ms=response_time_ms,
+    )
+    return answer
 
 
-def interactive_mode(rag_assistant: RAGAssistant, cache: ResponseCache):
+def interactive_mode(rag_assistant: RAGAssistant, cache: ResponseCache, logger: DatabaseLogger):
     """
     Интерактивный режим общения с ассистентом.
     
@@ -165,23 +200,60 @@ def interactive_mode(rag_assistant: RAGAssistant, cache: ResponseCache):
             
             # Обрабатываем специальные команды
             if user_input.lower() == 'cache':
-                print(f"\n📊 Кеш содержит {cache.size()} записей")
+                response = f"📊 Кеш содержит {cache.size()} записей"
+                print(f"\n{response}")
+                logger.log_interaction(
+                    query=user_input,
+                    response=response,
+                    source="interactive_command",
+                    user_id="local",
+                    username="local_user",
+                    from_cache=False,
+                    response_time_ms=0,
+                )
                 continue
             
             if user_input.lower() == 'clear_cache':
                 cache.clear()
-                print("\n✓ Кеш очищен")
+                response = "✓ Кеш очищен"
+                print(f"\n{response}")
+                logger.log_interaction(
+                    query=user_input,
+                    response=response,
+                    source="interactive_command",
+                    user_id="local",
+                    username="local_user",
+                    from_cache=False,
+                    response_time_ms=0,
+                )
                 continue
             
             if user_input.lower() == 'stats':
-                print(f"\n📊 СТАТИСТИКА СИСТЕМЫ:")
-                print(f"  • Документов в ChromaDB: {rag_assistant.embedding_store.collection.count()}")
-                print(f"  • Записей в кеше: {cache.size()}")
-                print(f"  • Модель LLM: {rag_assistant.model}")
+                db_stats = logger.get_stats()
+                response_lines = [
+                    "📊 СТАТИСТИКА СИСТЕМЫ:",
+                    f"  • Документов в ChromaDB: {rag_assistant.embedding_store.collection.count()}",
+                    f"  • Записей в кеше: {cache.size()}",
+                    f"  • Модель LLM: {rag_assistant.model}",
+                    f"  • Всего запросов: {db_stats['total_requests']}",
+                    f"  • Попаданий в кеш: {db_stats['cache_hits']}",
+                    f"  • Среднее время ответа (мс): {db_stats['avg_response_time_ms']:.2f}",
+                ]
+                response = "\n".join(response_lines)
+                print(f"\n{response}")
+                logger.log_interaction(
+                    query=user_input,
+                    response=response,
+                    source="interactive_command",
+                    user_id="local",
+                    username="local_user",
+                    from_cache=False,
+                    response_time_ms=0,
+                )
                 continue
             
             # Обрабатываем вопрос пользователя
-            answer_question(user_input, rag_assistant, cache)
+            answer_question(user_input, rag_assistant, cache, logger, source="interactive")
             
         except KeyboardInterrupt:
             print("\n\n👋 Прервано пользователем. До свидания!")
@@ -190,7 +262,7 @@ def interactive_mode(rag_assistant: RAGAssistant, cache: ResponseCache):
             print(f"\n❌ Ошибка: {str(e)}")
 
 
-def demo_mode(rag_assistant: RAGAssistant, cache: ResponseCache):
+def demo_mode(rag_assistant: RAGAssistant, cache: ResponseCache, logger: DatabaseLogger):
     """
     Демонстрационный режим с заранее заготовленными вопросами.
     
@@ -215,7 +287,7 @@ def demo_mode(rag_assistant: RAGAssistant, cache: ResponseCache):
         print(f"ВОПРОС {i} из {len(demo_questions)}")
         print(f"{'#' * 70}")
         
-        answer_question(question, rag_assistant, cache)
+        answer_question(question, rag_assistant, cache, logger, source="demo")
         
         # Пауза между вопросами (кроме последнего)
         if i < len(demo_questions):
@@ -232,7 +304,7 @@ def main():
     """
     try:
         # Инициализируем систему
-        embedding_store, rag_assistant, cache = initialize_system()
+        embedding_store, rag_assistant, cache, logger = initialize_system()
         
         # Выбор режима работы
         print("\n" + "=" * 70)
@@ -245,15 +317,15 @@ def main():
         mode = input("Выберите режим (1 или 2, по умолчанию 1): ").strip()
         
         if mode == '2':
-            demo_mode(rag_assistant, cache)
+            demo_mode(rag_assistant, cache, logger)
             
             # Предложить перейти в интерактивный режим
             print("\n" + "=" * 70)
             continue_interactive = input("\nПерейти в интерактивный режим? (y/n): ").strip().lower()
             if continue_interactive in ['y', 'yes', 'д', 'да', '']:
-                interactive_mode(rag_assistant, cache)
+                interactive_mode(rag_assistant, cache, logger)
         else:
-            interactive_mode(rag_assistant, cache)
+            interactive_mode(rag_assistant, cache, logger)
         
     except Exception as e:
         print(f"\n❌ Критическая ошибка: {str(e)}")

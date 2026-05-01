@@ -31,3 +31,5 @@ cache.json
 .DS_Store
 Thumbs.db
 
+logs.db
+*.csv

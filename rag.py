@@ -102,7 +102,7 @@ class RAGAssistant:
     def generate_response(
         self, 
         query: str, 
-        top_k: int = 3,
+        top_k: int = 7,
         verbose: bool = True
     ) -> Tuple[str, List[Tuple[str, str, float]]]:
         """
